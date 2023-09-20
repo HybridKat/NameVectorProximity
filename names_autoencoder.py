@@ -18,26 +18,39 @@ tf.debugging.experimental.disable_dump_debug_info()
 
 
 ################################ Parametres #################################
-randSeed = 5785
-retrain = True
+randSeed = 8547456
+retrain = False
+searchCV = False
 
-if retrain:
+if retrain and searchCV:
     param_dist = {
-        'latentDim': [32, 64, 128, 256],
-        'latentDimInterne': [64, 128, 256, 512],
+        'latentDim': [96, 128, 196, 258, 312],
+        'latentDimInterne': [128, 196, 256],
         'optimizerChoice': ['Adam', 'Nadam'],
-        'learningRate': np.logspace(-5, 0, num=10, endpoint=False),
-        'decaySteps': [10000, 50000, 100000, 1000000],
-        'decayRate': [0.9, 0.95, 0.99],
-        'dropoutRate': [0.01, 0.1, 0.25],
+        'learningRate': np.logspace(-4, -3, num=5, endpoint=False),
+        'decaySteps': [50000, 75000, 100000],
+        'decayRate': [0.9, 0.91, 0.95],
+        'dropoutRate': [0.05],
         'epochs': [1024],
-        'batch_size': [64, 128, 256],
-        'validation_split': [0.2],
+        'batch_size': [16, 24, 32],
+        'validation_split': [0.1, 0.15, 0.2],
     }
     # Calcul du nombre d'itérations
-    nbIterations = 30
+    nbIterations = 10
 else:
-    param_dist = {}
+    param_dist = {
+        'latentDim': 312,
+        'latentDimInterne': 128,
+        'optimizerChoice': 'Adam',
+        'learningRate': 0.0001,
+        'decaySteps': 50000,
+        'decayRate': 0.91,
+        'dropoutRate': 0.05,
+        'epochs': 1024,
+        'batch_size': 32,
+        'validation_split': 0.15,
+    }
+    nbIterations = 1
 
 ################################### Préparation des données #####################
 # Charge et nettoie les noms dans une liste avec des marqueurs de fin(^)
@@ -80,6 +93,10 @@ with open("first-names.txt", "r") as f:
         if clean!= "":
             listNoms.append(clean)#+"^")
 
+            for i in range(len(clean.split(" "))):
+                if clean.split(" ")[i] != "":
+                    listNoms.append(clean.split(" ")[i])
+
 # Enleve les Joseph ou Marie au début des noms si ce n'est pas le seul prénom
 for i in range(len(listNoms)):
     nom = listNoms[i]
@@ -112,8 +129,9 @@ with open("idx2char.txt", "w") as f:
 # Convertit les noms en index
 listNomsAsInt = []
 for nom in listNoms:
-    if(len(nom) <= 25):
+    if(len(nom) <= 30):
         listNomsAsInt.append([char2idx[c] for c in nom])
+print("Nombre de noms:", len(listNomsAsInt))
 
 
 ############################## Création du modèle AutoEncoder ##############################
@@ -161,7 +179,7 @@ def loss_fn(y_true, y_pred):
     loss = keras.losses.sparse_categorical_crossentropy(y_true, y_pred)
 
     # Pour chaque nom, calcule la distance de Levenshtein entre le nom original et le nom reconstruit
-    inputs = y_true.numpy()
+    """inputs = y_true.numpy()
     outputs = y_pred.numpy()
     levs = []
     for i in range(len(inputs)):
@@ -172,7 +190,7 @@ def loss_fn(y_true, y_pred):
 
     # Multiplie la perte selon la distance de Levenshtein
     levs = tf.reshape(tf.constant(levs, dtype=tf.float32), shape=(-1, 1))
-    loss = tf.multiply(loss, levs)
+    loss = tf.multiply(loss, levs)"""
     return loss
 
 
@@ -247,8 +265,9 @@ def buildAutoEncoder(latentDim=32, latentDimInterne=64, optimizerChoice="adam", 
 
     # Annonce le début de l'entraînement  
     print()
+    print('\a')
     print("============== Nouvelle itération ==============")
-    print("                 Iteration: ", iteration, "/", nbIterations)
+    print("                 Iteration: ", iteration, "/", nbIterations*5)
     print("latentDim:", latentDim)
     print("latentDimInterne:", latentDimInterne)
     print("optimizerChoice:", optimizerChoice)
@@ -299,22 +318,22 @@ def buildAutoEncoder(latentDim=32, latentDimInterne=64, optimizerChoice="adam", 
     return ae
  
 ##### Modèle AutoEncoder
-if retrain:     
-    # Early stopping    
-    earlyStopping = EarlyStoppingWithCheck(
-        patience=10, 
-        restore_best_weights=True, 
-        monitor="val_loss", 
-        start_from_epoch=20
-    )
+# Early stopping    
+earlyStopping = EarlyStoppingWithCheck(
+    patience=10, 
+    restore_best_weights=True, 
+    monitor="val_loss", 
+    start_from_epoch=20
+)
 
+if retrain and searchCV: 
     # Wrapper pour RandomizedSearchCV
     aeWrapper = KerasRegressor(build_fn=buildAutoEncoder)
     random_search = RandomizedSearchCV(
         estimator=aeWrapper,
         param_distributions=param_dist,
         verbose=2,
-        n_iter=3,#nbIterations,
+        n_iter=nbIterations,
         refit=True,
         n_jobs=1
     )
@@ -324,6 +343,12 @@ if retrain:
     results = pd.DataFrame(random_search.cv_results_)
     results.to_csv("all_results.csv", index=False)
 
+    # Avertissement sonore pour indiquer la fin de l'entraînement    
+    print('\a')
+    print('\a')
+    print('\a')
+
+
     # Get the best hyperparameters
     best_params = random_search.best_params_
     print("Meilleurs params : ", best_params)
@@ -331,41 +356,50 @@ if retrain:
     # Sauvegarde l'encodeur et le décodeur
     best_model = random_search.best_estimator_
     print("Meilleur modele : ", best_model)
-    best_model.save_weights("best_model.h5")
+    best_model.model.save("best_model.h5")
 
-    ae = AutoEncoder(best_model.encodeur, best_model.decodeur)
+    ae = best_model.model
+elif retrain and not searchCV:
+    ae = buildAutoEncoder(param_dist['latentDim'], param_dist['latentDimInterne'], param_dist['optimizerChoice'], param_dist['learningRate'], param_dist['decaySteps'], param_dist['decayRate'], param_dist['dropoutRate'], param_dist['epochs'], param_dist['batch_size'], param_dist['validation_split'])
 
+    ae.fit(nomsDataset, nomsDataset, epochs=param_dist['epochs'], batch_size=param_dist['batch_size'], validation_split=param_dist['validation_split'], callbacks=[earlyStopping])
+    ae.save_weights("best_model.h5")
 else:
-    # Encodeur
-    encodeur = keras.Sequential([
-        keras.layers.InputLayer(input_shape=[seqLength]),
-        keras.layers.Embedding(vocabSize, param_dist['latentDim']),
-        keras.layers.LSTM(param_dist['latentDimInterne']),
-        keras.layers.Dropout(0.25),
-        keras.layers.Dense(param_dist['latentDimInterne'], activation="tanh"),
-        keras.layers.Dense(param_dist['latentDim'], activation="tanh"),
-    ], name="encodeur")
-    
-    # Décodeur
-    decodeur = keras.Sequential([
-        keras.layers.InputLayer(input_shape=[param_dist['latentDim']]),
-        keras.layers.Dense(param_dist['latentDimInterne'], activation="tanh"),
-        keras.layers.Dropout(0.25),
-        keras.layers.RepeatVector(seqLength),
-        keras.layers.LSTM(param_dist['latentDimInterne'], return_sequences=True),
-        keras.layers.Dropout(0.25),
-        keras.layers.Dense(vocabSize, activation="softmax")
-    ])
-    ae = AutoEncoder(encodeur, decodeur)
+    ae = buildAutoEncoder(param_dist['latentDim'], param_dist['latentDimInterne'], param_dist['optimizerChoice'], param_dist['learningRate'], param_dist['decaySteps'], param_dist['decayRate'], param_dist['dropoutRate'], param_dist['epochs'], param_dist['batch_size'], param_dist['validation_split'])
+    ae.built = True
+    ae.load_weights("best_model.h5")
 
  
 ################################# Test sur des noms ###################################
-testNames = [
-    "James", "Helene", "Eugenie", "Haxan", "Keven", "Marie Anne", "Joseph Arthur",
-    "Jomes", "Helena", "Eugene", "Haxen", "Kevin", "Marieanne", "Jos Arture",
-    "Morie", "Marie", "Morin", "Maria", "Maurice", "Bob", "Jean Benoit"
+nomsReference = [
+    # Top 50
+    "Marie","Jean Baptiste","Francois","Charles","Marie Anne","Antoine","Catherine","Arthur","Alfred","Therese","Thomas","Philomene","Josephte","Napoleon","Andre","Sophie","Augustin","William","John","Alice","Josephine","Francois Xavier","Elisabeth","Rose","Madeleine","Joseph","Pierre","Louis","Marguerite","Marie Louise","Jean","Louise","Michel","Jacques","Genevieve","Angelique","Julie","Edouard","Henri","Georges","Paul","Albert","Mary","Francoise","Marie Josephe","Alphonse","Cecile","Anna","Etienne","Adelaide",
+
+    # Ajouts manuels
+    "Arnaud",
+    "James",
+    "Kevin",
 ]
+testNames = [
+    "arnot","arneault","jame","jamez",
+    
+]
+# Enleve les doublons
+testNames = list(dict.fromkeys(testNames))
+referenceEncoded = []
 namesEncoded = []
+
+# Encode et décode les noms de référence
+for name in nomsReference:
+    name = name.lower()#+ "^"
+    nameAsInt = [char2idx[c] for c in name]
+    nameAsInt = keras.preprocessing.sequence.pad_sequences([nameAsInt], maxlen=seqLength, padding="post")
+    nameAsInt = tf.convert_to_tensor(nameAsInt)
+
+    reconstructed_name = ae(nameAsInt)
+    reconstructed_name = tf.squeeze(reconstructed_name, axis=0)
+    
+    referenceEncoded.append(ae.encodeur(nameAsInt))
 
 # Encode et décode les noms de test
 for name in testNames:
@@ -384,28 +418,21 @@ for name in testNames:
     decoded_name = "".join(decoded_name).split("^")[0]
 
     print("Nom:", name)
+    # Affiche le début du nom encodé
+    print("Encodage (10 premiers elements):", ae.encodeur(nameAsInt)[0][:10])
     print("Reconstruction:", decoded_name)
     print()
     
-# Pour chaque combinaisons de noms, calcule la distance entre les deux noms et affiche le résultat dans une matrice
-print("Distances entre les noms:")
-for i in range(len(testNames)):
-    # Affiche les noms en haut de la matrice
-    if i == 0:
-        for name in testNames:
-            print(name, end=";")
-        print()
-    for j in range(len(testNames)):
-        if j == 0:
-            print(testNames[i], end=";")
-        dist = tf.norm(namesEncoded[i] - namesEncoded[j])
-        print(dist.numpy(), end=";")
-    print()
-
-# Inscrit les résultats de la matrice dans un fichier CSV
+# Pour chaque combinaisons de noms, calcule la distance entre les deux noms et créé une matrice de comparaison
 with open("distances.csv", "w") as f:
-    f.write("Nom1,Nom2,Distance\n")
-    for i in range(len(testNames)):
+    # Affiche les noms en haut de la matrice
+    f.write("Reference;")
+    for name in testNames:
+        f.write(name+";")
+    f.write("\n")
+    for i in range(len(nomsReference)):
+        f.write(nomsReference[i]+";")
         for j in range(len(testNames)):
-            dist = tf.norm(namesEncoded[i] - namesEncoded[j])
-            f.write(testNames[i]+","+testNames[j]+","+str(dist.numpy())+"\n")
+            dist = tf.norm(referenceEncoded[i] - namesEncoded[j])
+            f.write(str(dist.numpy())+";")
+        f.write("\n")
